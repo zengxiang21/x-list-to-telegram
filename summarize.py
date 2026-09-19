@@ -259,17 +259,75 @@ def build_digest(tweets: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _tweet_card(t: dict) -> str:
+    dt = parse_created(t["created"]).astimezone(TZ).strftime("%m-%d %H:%M") if t["created"] else ""
+    rt = f'<span class="handle">🔁 @{html.escape(t["retweeted_by"])} 转推</span>' if t.get("retweeted_by") else ""
+    body = _re.sub(r"https://t\.co/\w+", "", t["text"]).strip()
+    body = html.escape(body).replace("\n", "<br>") or "（无文字）"
+    url = f"https://x.com/{t['handle']}/status/{t['id']}"
+    return (f'<div class="card"><div class="head">'
+            f'<span class="author">{html.escape(t["name"])}</span>'
+            f'<span class="handle">@{html.escape(t["handle"])}</span>{rt}'
+            f'<span class="time">{dt}</span></div>'
+            f'<div class="text">{body}</div>'
+            f'<div class="stats">👍 {t["likes"]} · 🔁 {t["rts"]} · '
+            f'<a href="{url}">原推 ↗</a></div></div>')
+
+
 def build_attachment(tweets: list[dict]) -> bytes:
-    lines = [f"X 列表日报全文 {WINDOW_START:%Y-%m-%d %H:%M} → {WINDOW_END:%Y-%m-%d %H:%M}"
-             f"（北京时间，共 {len(tweets)} 条）", "=" * 40]
+    n_authors = len({t["handle"] for t in tweets})
+    top = [t for t in sorted(tweets, key=lambda t: -t["likes"]) if t["likes"] > 0][:5]
+    tags = Counter(h for t in tweets for h in t["hashtags"] if h).most_common(10)
+
+    by_author = defaultdict(list)
     for t in tweets:
-        dt = parse_created(t["created"]).astimezone(TZ).strftime("%m-%d %H:%M") if t["created"] else "?"
-        rt = f" [@{t['retweeted_by']} 转推]" if t.get("retweeted_by") else ""
-        lines.append(f"\n[{dt}] {t['name']} (@{t['handle']}){rt}  👍{t['likes']} 🔁{t['rts']}")
-        body = clean_text(t["text"])
-        lines.append(body if body else "（无文字）")
-        lines.append(f"链接: https://x.com/{t['handle']}/status/{t['id']}")
-    return "\n".join(lines).encode()
+        by_author[t["handle"]].append(t)
+    ranked = sorted(by_author.items(), key=lambda kv: -len(kv[1]))
+
+    parts = [
+        "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\">",
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<title>X 列表日报 {TODAY:%Y-%m-%d}</title><style>",
+        ":root{color-scheme:light dark}",
+        "body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;",
+        " margin:0;padding:24px 14px;background:#f6f7f9;color:#1c1e21;line-height:1.65}",
+        ".wrap{max-width:760px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}",
+        "h2{font-size:16px;margin:28px 0 8px}",
+        ".meta{color:#65676b;font-size:14px;margin-bottom:8px}",
+        ".card{background:#fff;border-radius:12px;padding:14px 16px;margin:10px 0;",
+        " box-shadow:0 1px 2px rgba(0,0,0,.06)}",
+        ".author{font-weight:600}.handle{color:#65676b;font-weight:400;font-size:13px;margin-left:6px}",
+        ".time{float:right;color:#8a8d91;font-size:12px}",
+        ".text{margin-top:6px;white-space:pre-wrap;word-break:break-word}",
+        ".stats{color:#65676b;font-size:13px;margin-top:8px}",
+        "a{color:#1c6fd4;text-decoration:none}",
+        ".chips span{display:inline-block;background:#e7f3ff;border-radius:14px;",
+        " padding:2px 10px;margin:2px;font-size:13px}",
+        ".row{font-size:14px;margin:4px 0}",
+        '@media (prefers-color-scheme: dark){body{background:#18191a;color:#e4e6eb}',
+        ".card{background:#242526;box-shadow:none}.handle,.time,.stats{color:#b0b3b8}",
+        ".chips span{background:#26395a}}",
+        "</style></head><body><div class=\"wrap\">",
+        f"<h1>📊 X 列表日报</h1>",
+        f'<div class="meta">{WINDOW_START:%m月%d日} 13:00 → {WINDOW_END:%m月%d日} 08:50（北京时间）'
+        f" · 共 {len(tweets)} 条推文 · {n_authors} 位博主</div>",
+    ]
+    if top:
+        parts.append("<h2>🔥 热门推文</h2>")
+        parts += [_tweet_card(t) for t in top]
+    if tags:
+        parts.append("<h2>💬 大家在聊</h2>")
+        parts.append('<div class="chips">' +
+                     "".join(f"<span>#{html.escape(k)} ×{v}</span>" for k, v in tags) + "</div>")
+    parts.append("<h2>👥 活跃作者</h2>")
+    parts.append('<div class="card">' +
+                 "".join(f'<div class="row">{html.escape(ts[0]["name"])}'
+                         f' <span class="handle">@{html.escape(h)}</span> — {len(ts)} 条</div>'
+                         for h, ts in ranked) + "</div>")
+    parts.append(f"<h2>🗂 全部推文（{len(tweets)} 条，按时间）</h2>")
+    parts += [_tweet_card(t) for t in tweets]
+    parts.append("</div></body></html>")
+    return "\n".join(parts).encode()
 
 
 # ---------- 状态 ----------
@@ -302,11 +360,11 @@ def main():
            disable_web_page_preview=True)
 
     if tweets and not DRY_RUN:
-        fname = f"x-list-daily-{TODAY}.txt"
+        fname = f"x-list-daily-{TODAY}.html"
         tg("sendDocument", data={"chat_id": CHAT_ID,
-                                 "caption": f"📎 全量推文 {len(tweets)} 条"},
+                                 "caption": f"📎 全部 {len(tweets)} 条推文（网页版报告，浏览器打开）"},
            files={"document": (fname, build_attachment(tweets),
-                               "text/plain; charset=utf-8")})
+                               "text/html; charset=utf-8")})
     mark_sent()
     log.info("日报发送完成%s", "（DRY_RUN）" if DRY_RUN else "")
 
