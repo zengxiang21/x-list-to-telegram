@@ -1,0 +1,43 @@
+name: X list daily summary
+
+on:
+  schedule:
+    - cron: "50 0 * * *"   # UTC 00:50 = 北京时间 08:50
+  workflow_dispatch: {}    # 支持手动触发
+
+concurrency:
+  group: x-daily-summary
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate and send daily summary
+        env:
+          AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+          CT0: ${{ secrets.CT0 }}
+          LIST_ID: ${{ secrets.LIST_ID }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python summarize.py
+
+      - name: Commit summary state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add summary-state.json
+          git diff --cached --quiet || (git commit -m "chore: daily summary sent [skip ci]" && git push)
