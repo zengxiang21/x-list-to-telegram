@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 import httpx
 
@@ -91,12 +92,20 @@ def tg(method: str, **params) -> dict | None:
     if DRY_RUN:
         log.info("[DRY_RUN] %s %s", method, json.dumps(params, ensure_ascii=False)[:500])
         return None
-    with httpx.Client(proxy=PROXY, timeout=30) as c:
-        resp = c.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}", json=params)
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegram {method} 失败: {data}")
-    return data
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            with httpx.Client(proxy=PROXY, timeout=30) as c:
+                resp = c.post(f"https://api.telegram.org/bot{BOT_TOKEN}/{method}", json=params)
+            data = resp.json()
+            if not data.get("ok"):
+                raise RuntimeError(f"Telegram {method} 失败: {data}")
+            return data
+        except (httpx.HTTPError, RuntimeError) as e:
+            last_err = e
+            log.warning("Telegram %s 失败（第 %s 次）: %s", method, attempt, e)
+            time.sleep(3 * attempt)
+    raise last_err
 
 
 def alert(text: str) -> None:
@@ -300,5 +309,5 @@ if __name__ == "__main__":
     except Exception as e:
         log.exception("运行失败")
         if not DRY_RUN:
-            alert(f"❌ X 列表推送脚本运行失败：{html.escape(str(e))[:500]}\n请查看 GitHub Actions 日志。")
+            alert(f"⚠️ X 列表推送中断：{html.escape(str(e))[:400]}\n已推送的部分不受影响，下一个周期会自动重试。")
         sys.exit(1)
