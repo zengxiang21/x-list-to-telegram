@@ -1,0 +1,43 @@
+name: X list to Telegram
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # 每 10 分钟一次；想更频繁可再加几条错开的 cron
+  workflow_dispatch: {}       # 允许在 Actions 页面手动触发
+
+concurrency:
+  group: x-list-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: write             # 用于回写 state.json
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run monitor
+        env:
+          AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+          CT0: ${{ secrets.CT0 }}
+          LIST_ID: ${{ secrets.LIST_ID }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python monitor.py
+
+      - name: Commit state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || (git commit -m "chore: update state [skip ci]" && git push)
