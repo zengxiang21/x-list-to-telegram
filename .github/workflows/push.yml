@@ -2,7 +2,9 @@ name: X list to Telegram
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # 每 10 分钟一次；想更频繁可再加几条错开的 cron
+    # 每 10 分钟一次，用错峰分钟避开 GitHub Actions 整点/十分高峰，降低触发延迟
+    - cron: "3,13,23,33,43,53 * * * *"
+    - cron: "8,18,28,38,48,58 * * * *"   # 叠加第二条，等效每 5 分钟一次
   workflow_dispatch: {}       # 允许在 Actions 页面手动触发
 
 concurrency:
